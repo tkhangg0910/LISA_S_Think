@@ -1,0 +1,17 @@
+**/__pycache__
+runs/
+.vscode/
+
+# --- local environment (kept inside the project, never committed) ---
+env/
+env-b200/
+.cache/
+checkpoints/
+dataset/
+logs/
+vis_output/*
+!vis_output/.gitkeep
+
+# dataset parquet: 260 MB, over GitHub's 100 MB/file limit.
+# fetch with setup/04_download_brain_data.sh
+data/

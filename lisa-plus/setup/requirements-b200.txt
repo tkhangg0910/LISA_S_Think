@@ -1,0 +1,45 @@
+# LISA dependencies for B200 (sm_100 / Blackwell).
+#
+# B200 needs CUDA >= 12.8, i.e. torch >= 2.7+cu128. torch/torchvision are
+# installed separately from the cu128 index in 01b_create_env_b200.sh.
+#
+# transformers stays at 4.31.0 because model/llava/ and model/LISA.py are
+# written against that API (custom LlamaForCausalLM.forward signature,
+# prepare_inputs_for_generation, images= kwarg through generate). Newer
+# transformers requires porting the modelling code, not just a version bump.
+# scripts/torch_compat.py papers over the torch-2.6+ / transformers-4.31 seams.
+
+transformers==4.31.0
+tokenizers==0.13.3
+huggingface_hub==0.17.3
+peft==0.4.0
+accelerate==0.21.0
+sentencepiece==0.1.99
+protobuf==3.20.3
+
+numpy==1.26.4
+opencv-python==4.10.0.84
+Pillow==10.3.0
+pycocotools==2.0.7
+scipy==1.11.4
+einops==0.6.1
+packaging
+shortuuid==1.0.11
+markdown2==2.4.10
+Requests==2.31.0
+tqdm==4.66.1
+
+deepspeed==0.16.5
+tensorboard==2.15.2
+
+hf_transfer==0.1.6
+gdown==5.2.0
+
+# utils/refer.py -> skimage.io
+scikit-image==0.22.0
+
+# utils/brain_seg_dataset.py reads the parquet directly
+pyarrow==15.0.2
+
+# lisa_plus branch: utils/utils.py imports sklearn.metrics
+scikit-learn==1.3.2
