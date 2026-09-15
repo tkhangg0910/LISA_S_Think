@@ -139,6 +139,12 @@ def collate_fn(
         truncate_len = tokenizer.model_max_length - 255
 
         if input_ids.shape[1] > truncate_len:
+            seg_id = tokenizer("[SEG]", add_special_tokens=False).input_ids
+            if len(seg_id) == 1 and (input_ids[:, truncate_len:] == seg_id[0]).any():
+                raise ValueError(
+                    "Training truncation would remove [SEG] tokens. Increase "
+                    "--model_max_length; image expansion reserves 255 tokens."
+                )
             input_ids = input_ids[:, :truncate_len]
             targets = targets[:, :truncate_len]
             attention_masks = attention_masks[:, :truncate_len]
@@ -188,6 +194,7 @@ class HybridDataset(torch.utils.data.Dataset):
         answer_order="reason_first",
         clip_view="center_crop",
         use_q1=False,
+        reasoning_mode="full",
     ):
         self.exclude_val = exclude_val
         self.dataset = dataset
@@ -263,6 +270,7 @@ class HybridDataset(torch.utils.data.Dataset):
                         answer_order,
                         clip_view,
                         use_q1,
+                        reasoning_mode,
                     )
                 )
             elif dataset == "reason_seg":

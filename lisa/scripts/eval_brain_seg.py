@@ -42,6 +42,8 @@ from utils.utils import dict_to_cuda  # noqa: E402
 
 def parse_args(argv):
     p = argparse.ArgumentParser(description="brain-MRI per-class IoU/DICE")
+    p.add_argument("--reasoning_mode", default="full", choices=["full", "localization_only", "morph_only", "malig_only"])
+    p.add_argument("--model_max_length", type=int, default=512)
     p.add_argument("--version", required=True, help="LISA checkpoint dir")
     p.add_argument("--parquet",
                    default="data/brain_data_split_v1/data/test-00000-of-00001.parquet")
@@ -101,7 +103,7 @@ class Acc:
 def main(argv):
     args = parse_args(argv)
 
-    margs = infer_parse_args(["--version", args.version, "--precision", args.precision])
+    margs = infer_parse_args(["--version", args.version, "--precision", args.precision, "--model_max_length", str(args.model_max_length)])
 
     # collate_fn splits rounds on the *default* conversation's separators, while the
     # dataset renders prompts with the same global. train_ds.py sets this; infer.py
@@ -117,7 +119,8 @@ def main(argv):
     ds = BrainSegValDataset(".", tokenizer, model.config.vision_tower, args.parquet,
                             neutral_reasoning=args.neutral_reasoning,
                             answer_order=args.answer_order,
-                            clip_view=args.clip_view, use_q1=args.use_q1)
+                            clip_view=args.clip_view, use_q1=args.use_q1,
+                            reasoning_mode=args.reasoning_mode)
     loader = torch.utils.data.DataLoader(
         ds, batch_size=1, shuffle=False, num_workers=4,
         collate_fn=lambda b: collate_fn(b, tokenizer=tokenizer,
@@ -197,7 +200,8 @@ def main(argv):
                        "neutral_reasoning": args.neutral_reasoning,
                        "answer_order": args.answer_order,
                        "clip_view": args.clip_view,
-                       "use_q1": args.use_q1}
+                       "use_q1": args.use_q1,
+                       "reasoning_mode": args.reasoning_mode}
 
     # per-sample IoU so the distribution can be inspected, not just its mean
     for cls in CLASSES + ["OVERALL"]:

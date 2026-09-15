@@ -143,7 +143,18 @@ def render_a1(a1_raw, decimals=2):
     return f"Regions of interest: {items}."
 
 
-def build_answer(row, present, neutral=False, order="reason_first", use_q1=False):
+REASONING_MODES = ("full", "localization_only", "morph_only", "malig_only")
+
+
+def validate_reasoning_mode(mode, order, use_q1, neutral=False):
+    if mode not in REASONING_MODES:
+        raise ValueError(f"Unknown reasoning_mode: {mode}")
+    if mode != "full" and (order != "reason_first" or use_q1 or neutral):
+        raise ValueError("Ablation modes require reason_first, no use_q1 and no neutral_reasoning")
+
+
+def build_answer(row, present, neutral=False, order="reason_first", use_q1=False,
+                 reasoning_mode="full"):
     """Build the assistant turn. Always exactly three [SEG] in CLASSES order.
 
     `present` maps class -> bool, taken from the masks (not from A3): A3 and the
@@ -160,6 +171,15 @@ def build_answer(row, present, neutral=False, order="reason_first", use_q1=False
     is exactly why specificity measured 1.000 with the text and 0.002-0.058 without it.
     seg_first removes every textual cue from the mask path.
     """
+    validate_reasoning_mode(reasoning_mode, order, use_q1, neutral)
+    if reasoning_mode != "full":
+        step = {"localization_only": "1", "morph_only": "2", "malig_only": "3"}[reasoning_mode]
+        keys = (f"Q{step}", f"A{step}", "Q4", "A4")
+        for key in keys:
+            if not isinstance(row.get(key), str) or not row[key].strip():
+                raise ValueError(f"{row.get('my_id', '<unknown>')}: missing/empty {key} for {reasoning_mode}")
+        return "\n".join(f"{key}: {row[key].strip()}" for key in keys) + "\n" + SEG_SENTENCE
+
     if order == "a4_seg":
         # Non-reasoning variant: input Q4, output A4 plus the three [SEG]. No A2
         # findings, no presence sentence, no A3 severity -- so nothing in the answer
@@ -212,7 +232,11 @@ class _BrainBase(torch.utils.data.Dataset):
     def _init_common(self, parquet_path, tokenizer, vision_tower, image_size):
         # keep the Arrow table rather than python objects: DataLoader workers fork,
         # and python refcounting would copy a few hundred MB per worker.
-        self.table = pq.read_table(parquet_path, columns=COLUMNS)
+        columns = list(COLUMNS)
+        if self.reasoning_mode != "full":
+            step = {"localization_only": "1", "morph_only": "2", "malig_only": "3"}[self.reasoning_mode]
+            columns += [f"Q{step}", "A4"]
+        self.table = pq.read_table(parquet_path, columns=columns)
         self.n = self.table.num_rows
         self.tokenizer = tokenizer
         self.image_size = image_size
@@ -233,6 +257,7 @@ class _BrainBase(torch.utils.data.Dataset):
     answer_order = "reason_first"
     clip_view = "center_crop"
     use_q1 = False
+    reasoning_mode = "full"
 
     def _build(self, idx):
         """Shared body: returns the 9-tuple LISA's collate_fn expects."""
@@ -262,7 +287,8 @@ class _BrainBase(torch.utils.data.Dataset):
 
         question = DEFAULT_IMAGE_TOKEN + "\n" + (row["Q4"] or "").strip()
         answer = build_answer(row, present, neutral=self.neutral_reasoning,
-                              order=self.answer_order, use_q1=self.use_q1)
+                              order=self.answer_order, use_q1=self.use_q1,
+                              reasoning_mode=self.reasoning_mode)
 
         conv = conversation_lib.default_conversation.copy()
         conv.messages = []
@@ -304,12 +330,15 @@ class BrainSegDataset(_BrainBase):
         answer_order="reason_first",
         clip_view="center_crop",
         use_q1=False,
+        reasoning_mode="full",
     ):
         self.samples_per_epoch = samples_per_epoch
         self.precision = precision
         self.answer_order = answer_order
         self.clip_view = clip_view
         self.use_q1 = use_q1
+        self.reasoning_mode = reasoning_mode
+        validate_reasoning_mode(reasoning_mode, answer_order, use_q1, self.neutral_reasoning)
         self._init_common(brain_seg_data, tokenizer, vision_tower, image_size)
 
     def __len__(self):
@@ -334,11 +363,14 @@ class BrainSegValDataset(_BrainBase):
         answer_order="reason_first",
         clip_view="center_crop",
         use_q1=False,
+        reasoning_mode="full",
     ):
         self.neutral_reasoning = neutral_reasoning
         self.answer_order = answer_order
         self.clip_view = clip_view
         self.use_q1 = use_q1
+        self.reasoning_mode = reasoning_mode
+        validate_reasoning_mode(reasoning_mode, answer_order, use_q1, self.neutral_reasoning)
         self._init_common(brain_seg_data, tokenizer, vision_tower, image_size)
 
     def __len__(self):

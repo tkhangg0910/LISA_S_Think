@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import re
 import shutil
@@ -25,6 +26,7 @@ from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
 
 def parse_args(args):
     parser = argparse.ArgumentParser(description="LISA Model Training")
+    parser.add_argument("--reasoning_mode", default="full", choices=["full", "localization_only", "morph_only", "malig_only"])
     parser.add_argument("--local_rank", default=0, type=int, help="node rank")
     parser.add_argument(
         "--version", default="liuhaotian/llava-llama-2-13b-chat-lightning-preview"
@@ -160,6 +162,8 @@ def parse_args(args):
 
 def main(args):
     args = parse_args(args)
+    from utils.brain_seg_dataset import validate_reasoning_mode
+    validate_reasoning_mode(args.reasoning_mode, args.answer_order, args.use_q1)
     args.log_dir = os.path.join(args.log_base_dir, args.exp_name)
     if args.local_rank == 0:
         os.makedirs(args.log_dir, exist_ok=True)
@@ -318,6 +322,7 @@ def main(args):
         answer_order=args.answer_order,
         clip_view=args.clip_view,
         use_q1=args.use_q1,
+        reasoning_mode=args.reasoning_mode,
         sem_seg_data=args.sem_seg_data,
         refer_seg_data=args.refer_seg_data,
         vqa_data=args.vqa_data,
@@ -335,6 +340,7 @@ def main(args):
                 answer_order=args.answer_order,
                 clip_view=args.clip_view,
                 use_q1=args.use_q1,
+                reasoning_mode=args.reasoning_mode,
             )
         else:
             val_dataset = ValDataset(
@@ -450,7 +456,14 @@ def main(args):
         giou, ciou = validate(val_loader, model_engine, 0, writer, args)
         exit()
 
+    if args.local_rank == 0:
+        with open(os.path.join(args.log_dir, "run_config.json"), "w") as f:
+            json.dump(vars(args), f, indent=2)
+
     for epoch in range(args.start_epoch, args.epochs):
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        epoch_start = time.perf_counter()
         # train for one epoch
         train_iter = train(
             train_loader,
@@ -462,12 +475,16 @@ def main(args):
             args,
         )
 
+        torch.cuda.synchronize()
+        train_end = time.perf_counter()
         if args.no_eval == False:
             giou, ciou = validate(val_loader, model_engine, epoch, writer, args)
             is_best = giou > best_score
             best_score = max(giou, best_score)
             cur_ciou = ciou if is_best else cur_ciou
 
+        torch.cuda.synchronize()
+        val_end = time.perf_counter()
         if args.no_eval or is_best:
             save_dir = os.path.join(args.log_dir, "ckpt_model")
             if args.local_rank == 0:
@@ -484,6 +501,22 @@ def main(args):
                     shutil.rmtree(save_dir)
             torch.distributed.barrier()
             model_engine.save_checkpoint(save_dir)
+
+        torch.cuda.synchronize()
+        epoch_end = time.perf_counter()
+        timing = {
+            "epoch": epoch + 1, "reasoning_mode": args.reasoning_mode,
+            "train_seconds": train_end - epoch_start,
+            "validation_seconds": val_end - train_end,
+            "checkpoint_seconds": epoch_end - val_end,
+            "total_seconds": epoch_end - epoch_start,
+            "peak_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
+            "peak_reserved_gib": torch.cuda.max_memory_reserved() / 2**30,
+        }
+        if args.local_rank == 0:
+            print("EPOCH_TIMING " + json.dumps(timing), flush=True)
+            with open(os.path.join(args.log_dir, "epoch_timing.jsonl"), "a") as f:
+                f.write(json.dumps(timing) + "\n")
 
 
 def train(
